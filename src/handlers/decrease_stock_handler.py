@@ -31,9 +31,11 @@ class DecreaseStockHandler(Handler):
                 self.logger.debug("Transition d'état: DecreaseStock -> STOCK_DECREASED")
                 return OrderSagaState.STOCK_DECREASED
             else:
+                self.logger.error("Erreur:", response.status_code, response.text)
                 return self.rollback()
             
         except Exception:
+            self.logger.error("Erreur:", response.status_code, response.text)
             return self.rollback()
         
     def rollback(self):

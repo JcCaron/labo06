@@ -4,6 +4,7 @@ SPDX - License - Identifier: LGPL - 3.0 - or -later
 Auteurs : Gabriel C. Ullmann, Fabio Petrillo, 2025
 """
 import requests
+import config
 from handlers.handler import Handler
 from order_saga_state import OrderSagaState
 
@@ -20,21 +21,27 @@ class CreatePaymentHandler(Handler):
     def run(self):
         """Call payment microservice to generate payment transaction"""
         try:
-            # TODO: effectuer une requête à /orders pour obtenir le total_amount de la commande (que sera utilisé pour démander la transaction de paiement)
-            """
-            GET my-api-gateway-address/order/{id} ...
-            """
+            response = requests.get(f'{config.API_GATEWAY_URL}/store-manager-api/orders/{self.order_id}')
+            if not response.ok:
+                self.logger.error("Erreur:", response.status_code, response.text)
+                return self.rollback()
+            response_data = response.json()
+            self.total_amount = response_data.get('total_amount') if response_data else 0
+            user_id = response_data.get('user_id') if response_data else ""
+            response = requests.post(f'{config.API_GATEWAY_URL}/payments-api/payments',
+                json= {
+                    "total_amount":self.total_amount,
+                    "user_id": user_id,
+                    "order_id": self.order_id
+                },
+                headers={'Content-Type': 'application/json'}
+            )
 
-            # TODO: effectuer une requête à /payments pour créer une transaction de paiement
-            """
-            POST my-api-gateway-address/payments ...
-            json={ voir collection Postman pour en savoir plus ... }
-            """
-            response_ok = True
-            if response_ok:
+            if response.ok:
                 self.logger.debug("Transition d'état: CreatePayment -> PAYMENT_CREATED")
                 return OrderSagaState.PAYMENT_CREATED
             else:
+                self.logger.error("Erreur:", response.status_code, response.text)
                 return self.rollback()
 
         except Exception:
@@ -42,6 +49,21 @@ class CreatePaymentHandler(Handler):
         
     def rollback(self):
         """ Call StoreManager to restore stock quantities if payment transaction creation fails """
-        # TODO: remettre en stock tous les articles qui avaient été retirés du stock (dans self.order_data)
-        self.logger.debug("Transition d'état: CreatePaymentFailure -> STOCK_INCREASED")
-        return OrderSagaState.STOCK_INCREASED
+        try:
+            response = requests.put(f'{config.API_GATEWAY_URL}/store-manager-api/stocks',
+                json= {
+                   "items": self.order_data,
+                   "operation": "+"
+                },
+                headers={'Content-Type': 'application/json'}
+            )
+            if response.ok:
+                self.logger.debug("Transition d'état: CreatePaymentFailure -> STOCK_INCREASED")
+                return OrderSagaState.STOCK_INCREASED
+            
+        except Exception as e:
+            self.logger.error("CreatePaymentHandler a échoué : " + str(e))
+            return OrderSagaState.END
+        
+        self.logger.error("CreatePaymentHandler a échoué")
+        return OrderSagaState.END
